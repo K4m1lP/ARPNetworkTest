@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
 
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
@@ -14,9 +16,10 @@
 
 int my_socket = 0;
 void* buffer = NULL;
-long total_packets = 0;
 char DEVICE[30];
 unsigned char src_mac[6];
+
+void sigint(int signum);
 
 int main(int argc, char* argv[]) {
 
@@ -69,6 +72,8 @@ int main(int argc, char* argv[]) {
     socket_address.sll_addr[6] = 0x00;
     socket_address.sll_addr[7] = 0x00;
 
+    signal(SIGINT, sigint);
+
     printf("Waiting for packets ... \n");
 
     while (1) {
@@ -81,4 +86,19 @@ int main(int argc, char* argv[]) {
 
     }
 
+}
+
+
+void sigint(int signum) {
+    struct ifreq ifr;
+    if (my_socket == -1)
+        return;
+    strncpy(ifr.ifr_name, DEVICE, IFNAMSIZ);
+    ioctl(my_socket, SIOCGIFFLAGS, &ifr);
+    ifr.ifr_flags &= ~IFF_PROMISC;
+    ioctl(my_socket, SIOCSIFFLAGS, &ifr);
+    close(my_socket);
+    free(buffer);
+    printf("Server terminating....\n");
+    exit(0);
 }
