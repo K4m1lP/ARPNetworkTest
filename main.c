@@ -21,6 +21,105 @@ unsigned char src_mac[6];
 
 void sigint(int signum);
 
+int filterMacBroadcast(const unsigned char* bytes) {
+    for (int i = 0; i < 6; i++)
+        if (bytes[i] != 0xff)
+            return 0;
+    return 1;
+}
+
+int filterArp(const unsigned char* bytes) {
+    return bytes[12] == 0x08 && bytes[13] == 0x06;
+}
+
+int filterIPv4(const unsigned char* bytes) {
+    return bytes[16] == 0x08 && bytes[17] == 0x00;
+}
+
+int filterRequest(const unsigned char* bytes) {
+    return bytes[20] == 0x00 && bytes[21] == 0x01;
+}
+
+int filterSenderIpBroadcast(const unsigned char* bytes) {
+    for (int i = 28; i < 32; i++)
+        if (bytes[i] != 0x00)
+            return 0;
+    return 1;
+}
+
+int filterTargetMacBroadcast(const unsigned char* bytes) {
+    for (int i = 28; i < 32; i++)
+        if (bytes[i] != 0x00)
+            return 0;
+    return 1;
+}
+
+int filterMessage(const unsigned char* bytes) {
+    return filterMacBroadcast(bytes) &&
+        filterArp(bytes) &&
+        filterIPv4(bytes) &&
+        filterRequest(bytes) &&
+        filterSenderIpBroadcast(bytes) &&
+        filterTargetMacBroadcast(bytes);
+}
+
+void fillDestination(unsigned char* bytes) {
+    for (int i = 0; i < 6; i++) {
+        bytes[i] = bytes[i + 6];
+    }
+}
+
+void fillSource(unsigned char* bytes) {
+    for (int i = 0; i < 6; i++) {
+        bytes[i + 6] = src_mac[i];
+    }
+}
+
+void fillOpcode(unsigned char* bytes) {
+    bytes[21] = 0x02;
+}
+
+void fillTargetMac(unsigned char* bytes) {
+    for (int i = 0; i < 6; i++) {
+        bytes[i + 32] = bytes[i + 22];
+    }
+}
+
+void fillSenderMac(unsigned char* bytes) {
+    for (int i = 0; i < 6; i++) {
+        bytes[i + 22] = src_mac[i];
+    }
+}
+
+void fillSenderIp(unsigned char* bytes) {
+    for (int i = 0; i < 4; i++) {
+        bytes[i + 28] = bytes[i + 38];
+    }
+}
+
+void fillTargetIp(unsigned char* bytes) {
+    for (int i = 0; i < 4; i++) {
+        bytes[i + 38] = 0x00;
+    }
+}
+
+// first byte of buffer must be the first byte of destination MAC address
+// ignores no-ARPProbe frames
+// modifies buffer in-place to response
+void processMessage(void* buffer) {
+    unsigned char* bytes = buffer;
+    if (!filterMessage(bytes))
+        return;
+
+    fillDestination(bytes);
+    fillSource(bytes);
+    fillOpcode(bytes);
+    fillTargetMac(bytes);
+    fillSenderMac(bytes);
+    fillSenderIp(bytes);
+    fillTargetIp(bytes);
+}
+
 int main(int argc, char* argv[]) {
 
     strcpy(DEVICE, argv[1]);
