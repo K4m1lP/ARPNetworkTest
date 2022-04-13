@@ -12,7 +12,7 @@
 #include <linux/if_arp.h>
 #include <netinet/in.h>
 
-#define BUF_SIZE 42
+#define BUF_SIZE 100
 
 int my_socket = 0;
 void* buffer = NULL;
@@ -106,10 +106,10 @@ void fillTargetIp(unsigned char* bytes) {
 // first byte of buffer must be the first byte of destination MAC address
 // ignores no-ARPProbe frames
 // modifies buffer in-place to response
-void processMessage(void* buffer) {
+int processMessage(void* buffer) {
     unsigned char* bytes = buffer;
     if (!filterMessage(bytes))
-        return;
+        return 0;
 
     fillDestination(bytes);
     fillSource(bytes);
@@ -118,6 +118,7 @@ void processMessage(void* buffer) {
     fillSenderMac(bytes);
     fillSenderIp(bytes);
     fillTargetIp(bytes);
+    return 1;
 }
 
 int main(int argc, char* argv[]) {
@@ -181,8 +182,11 @@ int main(int argc, char* argv[]) {
         {
             exit(1);
         }
-        printf("Something was received ...\n");
 
+        for (int i = 0; i < BUF_SIZE; i++) {
+            printf("%02X ", buffer[i]);
+        }
+        printf("\n");
     }
 
 }
