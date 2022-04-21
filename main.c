@@ -122,6 +122,18 @@ int processMessage(void* buffer) {
     return 1;
 }
 
+void printMessage(unsigned char* message) {
+    int lineLength[] = { 6, 6, 2, 2, 2, 1, 1, 2, 6, 4, 6, 4 };
+    int byte = 0;
+    for (int i = 0; i < 12; i++) {
+        printf("\n");
+        for (int j = 0; j < lineLength[i]; j++) {
+            printf("%02X", message[byte]);
+            byte++;
+        }
+    }
+}
+
 int main(int argc, char* argv[]) {
 
     if(argc<2||argc>2){
@@ -189,8 +201,14 @@ int main(int argc, char* argv[]) {
         {
             exit(1);
         }
+        unsigned char original[BUF_SIZE];
+        memcpy(original, buffer, BUF_SIZE);
         if(processMessage(buffer)==1){
-            printf("Ohh... There is some ARP-Probe packet, let's send it back to owner Hihih\n");
+            printf("In: \n");
+            printMessage(original);
+            printf("Out: \n");
+            printMessage(buffer);
+            printf("\n\n");
             int send_len = sendto(my_socket, buffer, BUF_SIZE, 0, (const struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll));
             if(send_len<0)
             {
