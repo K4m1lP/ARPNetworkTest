@@ -56,6 +56,12 @@ int filterTargetMacBroadcast(const unsigned char* bytes) {
     return 1;
 }
 
+// IPv6
+
+int filterIpv6(const unsigned char* bytes) {
+    return bytes[12] == 0x86 && bytes[13] == 0xdd;
+}
+
 int filterMessage(const unsigned char* bytes) {
     return filterMacBroadcast(bytes) &&
         filterArp(bytes) &&
@@ -204,7 +210,12 @@ int main(int argc, char* argv[]) {
         }
         unsigned char original[BUF_SIZE];
         memcpy(original, buffer, BUF_SIZE);
-        if(processMessage(buffer)==1){
+
+        if (filterIpv6(buffer)) {
+            printf("IPv6\n\n");
+        }
+
+        if(processMessage(buffer)==1) {
             printf("In: \n");
             printMessage(original);
             printf("Out: \n");
