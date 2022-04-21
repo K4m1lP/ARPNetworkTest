@@ -11,6 +11,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_arp.h>
 #include <netinet/in.h>
+#include <errno.h>
 
 #define BUF_SIZE 100
 
@@ -123,6 +124,11 @@ int processMessage(void* buffer) {
 
 int main(int argc, char* argv[]) {
 
+    if(argc<2||argc>2){
+        printf("Give network interface name...");
+        exit(1);
+    }
+
     strcpy(DEVICE, argv[1]);
 
     buffer = (void*)malloc(BUF_SIZE);
@@ -132,7 +138,6 @@ int main(int argc, char* argv[]) {
     int ifindex = 0;
     int i;
     int length;
-    int sent;
 
     printf("Server started, entering initialiation phase...\n");
 
@@ -149,6 +154,7 @@ int main(int argc, char* argv[]) {
         perror("SIOCGIFINDEX");
         exit(1);
     }
+
     ifindex = ifr.ifr_ifindex;
     printf("Successfully got interface index: %i\n", ifindex);
 
@@ -156,6 +162,7 @@ int main(int argc, char* argv[]) {
         perror("SIOCGIFINDEX");
         exit(1);
     }
+
     for (i = 0; i < 6; i++) {
         src_mac[i] = ifr.ifr_hwaddr.sa_data[i];
     }
@@ -182,20 +189,24 @@ int main(int argc, char* argv[]) {
         {
             exit(1);
         }
-
-        for (int i = 0; i < BUF_SIZE; i++) {
-            printf("%02X ", buffer[i]);
+        if(processMessage(buffer)==1){
+            printf("Ohh... There is some ARP-Probe packet, let's send it back to owner Hihih\n");
+            int send_len = sendto(my_socket, buffer, BUF_SIZE, 0, (const struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll));
+            if(send_len<0)
+            {
+                printf("error in sending....sendlen=%d....errno=%d\n", send_len, errno);
+                return -1;
+            }
         }
-        printf("\n");
     }
-
 }
-
 
 void sigint(int signum) {
     struct ifreq ifr;
+
     if (my_socket == -1)
         return;
+
     strncpy(ifr.ifr_name, DEVICE, IFNAMSIZ);
     ioctl(my_socket, SIOCGIFFLAGS, &ifr);
     ifr.ifr_flags &= ~IFF_PROMISC;
