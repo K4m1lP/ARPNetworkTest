@@ -14,6 +14,7 @@
 #include <errno.h>
 
 #define BUF_SIZE 100
+#define SEND_BUFF_SIZE 42
 
 int my_socket = 0;
 void* buffer = NULL;
@@ -128,7 +129,7 @@ void printMessage(unsigned char* message) {
     for (int i = 0; i < 12; i++) {
         printf("\n");
         for (int j = 0; j < lineLength[i]; j++) {
-            printf("%02X", message[byte]);
+            printf("%02X ", message[byte]);
             byte++;
         }
     }
@@ -209,10 +210,9 @@ int main(int argc, char* argv[]) {
             printf("Out: \n");
             printMessage(buffer);
             printf("\n\n");
-            int send_len = sendto(my_socket, buffer, BUF_SIZE, 0, (const struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll));
-            if(send_len<0)
+            if(sendto(my_socket, buffer, SEND_BUFF_SIZE, 0, (const struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll))<0)
             {
-                printf("error in sending....sendlen=%d....errno=%d\n", send_len, errno);
+                printf("error in sending....errno=%d\n", errno);
                 return -1;
             }
         }
