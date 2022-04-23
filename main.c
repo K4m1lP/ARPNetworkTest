@@ -12,9 +12,12 @@
 #include <linux/if_arp.h>
 #include <netinet/in.h>
 #include <errno.h>
+#include <cstdint>
 
 #define BUF_SIZE 100
-#define SEND_BUFF_SIZE 42
+
+#define ICMPv6_HDRLEN 32
+#define ICMPv6_NXTHDR 58
 
 int my_socket = 0;
 void* buffer = NULL;
@@ -56,13 +59,7 @@ int filterTargetMacBroadcast(const unsigned char* bytes) {
     return 1;
 }
 
-// IPv6
-
-int filterIpv6(const unsigned char* bytes) {
-    return bytes[12] == 0x86 && bytes[13] == 0xdd;
-}
-
-int filterMessage(const unsigned char* bytes) {
+int filterMessageIPv4(const unsigned char* bytes) {
     return filterMacBroadcast(bytes) &&
         filterArp(bytes) &&
         filterIPv4(bytes) &&
@@ -111,14 +108,7 @@ void fillTargetIp(unsigned char* bytes) {
     }
 }
 
-// first byte of buffer must be the first byte of destination MAC address
-// ignores no-ARPProbe frames
-// modifies buffer in-place to response
-int processMessage(void* buffer) {
-    unsigned char* bytes = buffer;
-    if (!filterMessage(bytes))
-        return 0;
-
+void prepareResponseIPv4(unsigned char* bytes) {
     fillDestination(bytes);
     fillSource(bytes);
     fillOpcode(bytes);
@@ -126,19 +116,269 @@ int processMessage(void* buffer) {
     fillSenderMac(bytes);
     fillSenderIp(bytes);
     fillTargetIp(bytes);
+}
+
+// IPv6 filter
+
+int filterMacMulticast(const unsigned char* bytes) {
+    const unsigned char IPv6mcast_ff[] = { 0x33, 0x33, 0xff };
+    for (int i = 0; i < 3; i++)
+        if (bytes[i] != IPv6mcast_ff[i])
+            return 0;
     return 1;
 }
 
-void printMessage(unsigned char* message) {
-    int lineLength[] = { 6, 6, 2, 2, 2, 1, 1, 2, 6, 4, 6, 4 };
+int filterIpv6(const unsigned char* bytes) {
+    return bytes[12] == 0x86 && bytes[13] == 0xdd && (bytes[14] >> 4) == 6;
+}
+
+int filterICMPv6(const unsigned char* bytes) {
+    return bytes[20] == 0x3a;
+}
+
+int filterSourceIPv6(const unsigned char* bytes) {
+    for (int i = 0; i < 16; i++)
+        if (bytes[i + 22] != 0x00)
+            return 0;
+    return 1;
+}
+
+int filterNeighbourSolicitation(const unsigned char* bytes) {
+    return bytes[54] == 0x87;
+}
+
+int filterMessageIPv6(const unsigned char* bytes) {
+    return filterMacMulticast(bytes) &&
+        filterIpv6(bytes) &&
+        filterICMPv6(bytes) &&
+        filterSourceIPv6(bytes) &&
+        filterNeighbourSolicitation(bytes);
+}
+
+// IPv6 prepare
+
+void fillMacMulticast(unsigned char* bytes) {
+    const unsigned char IPv6mcast_01[] = { 0x33, 0x33, 0x00, 0x00, 0x00, 0x01 };
+    for (int i = 0; i < 6; i++)
+        bytes[i] = IPv6mcast_01[i];
+}
+
+void fillPayloadLength(unsigned char* bytes) {
+    bytes[18] = 0x00;
+    bytes[19] = 0x20;
+}
+
+void fillHopLimit(unsigned char* bytes) {
+    bytes[21] = 0xff;
+}
+
+void fillSourceIPv6(unsigned char* bytes) {
+    for (int i = 0; i < 16; i++)
+        bytes[i + 22] = bytes[i + 62];
+}
+
+void fillDestinationIPv6(unsigned char* bytes) {
+    const unsigned char destIPv6[] = { 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
+    for (int i = 0; i < 16; i++)
+        bytes[i + 38] = destIPv6[i];
+}
+
+void fillNeighbourAdvertisement(unsigned char* bytes) {
+    bytes[54] = 0x88;
+}
+
+void fillOverrideFlag(unsigned char* bytes) {
+    bytes[58] = 0x20;
+    bytes[59] = 0x00;
+    bytes[60] = 0x00;
+    bytes[61] = 0x00;
+}
+
+void fillOptionType(unsigned char* bytes) {
+    bytes[78] = 0x02;
+}
+
+void fillOptionLength(unsigned char* bytes) {
+    bytes[79] = 0x01;
+}
+
+void fillOptionAddress(unsigned char* bytes) {
+    for (int i = 0; i < 6; i++) {
+        bytes[i + 80] = src_mac[i];
+    }
+}
+
+uint16_t checksum(uint16_t* addr, int len) {
+
+    int count = len;
+    register uint32_t sum = 0;
+    uint16_t answer = 0;
+
+    // Sum up 2-byte values until none or only one byte left.
+    while (count > 1) {
+        sum += *(addr++);
+        count -= 2;
+    }
+
+    // Add left-over byte, if any.
+    if (count > 0) {
+        sum += *(uint8_t*)addr;
+    }
+
+    // Fold 32-bit sum into 16 bits; we lose information by doing this,
+    // increasing the chances of a collision.
+    // sum = (lower 16 bits) + (upper 16 bits shifted right 16 bits)
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+
+    // Checksum is one's compliment of sum.
+    answer = ~sum;
+
+    return (answer);
+}
+
+uint16_t icmpv6checksum(const unsigned char* bytes) {
+    unsigned char buf[BUF_SIZE] = { 0 };
+    unsigned char* ptr = buf;
+    int checksumLen = 0;
+
+    // Copy source IP address into buf (128 bits)
+    memcpy(ptr, bytes + 22, 16);
+    ptr += 16;
+    checksumLen += 16;
+
+    // Copy destination IP address into buf (128 bits)
+    memcpy(ptr, bytes + 38, 16);
+    ptr += 16;
+    checksumLen += 16;
+
+    // Copy Upper Layer Packet length into buf (32 bits).
+    // Should not be greater than 65535 (i.e., 2 bytes).
+    *ptr = 0; ptr++;
+    *ptr = 0; ptr++;
+    *ptr = ICMPv6_HDRLEN / 256;
+    ptr++;
+    *ptr = ICMPv6_HDRLEN % 256;
+    ptr++;
+    checksumLen += 4;
+
+    // Copy zero field to buf (24 bits)
+    *ptr = 0; ptr++;
+    *ptr = 0; ptr++;
+    *ptr = 0; ptr++;
+    checksumLen += 3;
+
+    // Copy next header field to buf (8 bits)
+    *ptr = ICMPv6_NXTHDR; ptr++; checksumLen++;
+
+    // Copy ICMPv6 type to buf (8 bits)
+    memcpy(ptr, bytes + 54, 1);
+    ptr++;
+    checksumLen++;
+
+    // Copy ICMPv6 code to buf (8 bits)
+    memcpy(ptr, bytes + 55, 1);
+    ptr++;
+    checksumLen++;
+
+    // Copy ICMPv6 checksum to buf (16 bits)
+    // Zero, since we don't know it yet.
+    *ptr = 0; ptr++;
+    *ptr = 0; ptr++;
+    checksumLen += 2;
+
+    // Copy ICMPv6 flags to buf (16 bits)
+    memcpy(ptr, bytes + 58, 4);
+    ptr += 4;
+    checksumLen += 4;
+
+    // Copy ICMPv6 target address to buf
+    memcpy(ptr, bytes + 62, 16);
+    ptr += 16;
+    checksumLen += 16;
+
+    // Copy ICMPv6 options to buf
+    memcpy(ptr, bytes + 78, 8);
+    ptr += 8;
+    checksumLen += 8;
+
+    return checksum((uint16_t*)buf, checksumLen);
+}
+
+void fillChecksum(unsigned char* bytes) {
+    uint16_t sum = icmpv6checksum(bytes);
+
+    // reverse bytes
+    bytes[56] = sum;
+    bytes[57] = sum >> 8;
+}
+
+void prepareResponseIPv6(unsigned char* bytes) {
+    fillMacMulticast(bytes);
+    fillSource(bytes);
+    fillPayloadLength(bytes);
+    fillHopLimit(bytes);
+    fillSourceIPv6(bytes);
+    fillDestinationIPv6(bytes);
+    fillNeighbourAdvertisement(bytes);
+    fillOverrideFlag(bytes);
+    fillOptionType(bytes);
+    fillOptionLength(bytes);
+    fillOptionAddress(bytes);
+    fillChecksum(bytes);
+}
+
+void printBytes(unsigned char* message, int lineLength[], int size) {
     int byte = 0;
-    for (int i = 0; i < 12; i++) {
-        printf("\n");
+    for (int i = 0; i < size; i++) {
+        printf("\n\t");
         for (int j = 0; j < lineLength[i]; j++) {
             printf("%02X ", message[byte]);
             byte++;
         }
     }
+}
+
+void printIPv4(unsigned char* message) {
+    int lineLength[] = { 6, 6, 2, 2, 2, 1, 1, 2, 6, 4, 6, 4 };
+    printBytes(message, lineLength, 12);
+}
+
+void printIPv6req(unsigned char* message) {
+    int lineLength[] = { 6, 6, 2, 4, 2, 1, 1, 16, 16, 1, 1, 2, 4, 16 };
+    printBytes(message, lineLength, 14);
+}
+
+void printIPv6resp(unsigned char* message) {
+    int lineLength[] = { 6, 6, 2, 4, 2, 1, 1, 16, 16, 1, 1, 2, 4, 16, 1, 1, 6 };
+    printBytes(message, lineLength, 17);
+}
+
+// first byte of buffer must be the first byte of destination MAC address
+// ignores no-ARPProbe frames
+// modifies buffer in-place to response
+size_t processMessage(void* buffer) {
+    unsigned char* bytes = (unsigned char*)buffer;
+    if (filterMessageIPv4(bytes)) {
+        printf("\n\nIPv4 Probe: ");
+        printIPv4(bytes);
+        prepareResponseIPv4(bytes);
+        printf("\nIPv4 Response: ");
+        printIPv4(bytes);
+        return 42;
+    }
+
+    if (filterMessageIPv6(bytes)) {
+        printf("\n\nIPv6 NS: ");
+        printIPv6req(bytes);
+        prepareResponseIPv6(bytes);
+        printf("\nIPv6 NA: ");
+        printIPv6resp(bytes);
+        return 85;
+    }
+
+    return 0;
 }
 
 int main(int argc, char* argv[]) {
@@ -208,20 +448,10 @@ int main(int argc, char* argv[]) {
         {
             exit(1);
         }
-        unsigned char original[BUF_SIZE];
-        memcpy(original, buffer, BUF_SIZE);
 
-        if (filterIpv6(buffer)) {
-            printf("IPv6\n\n");
-        }
-
-        if(processMessage(buffer)==1) {
-            printf("In: \n");
-            printMessage(original);
-            printf("Out: \n");
-            printMessage(buffer);
-            printf("\n\n");
-            if(sendto(my_socket, buffer, SEND_BUFF_SIZE, 0, (const struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll))<0)
+        size_t bytesToSend = processMessage(buffer);
+        if(bytesToSend) {
+            if(sendto(my_socket, buffer, bytesToSend, 0, (const struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll))<0)
             {
                 printf("error in sending....errno=%d\n", errno);
                 return -1;
