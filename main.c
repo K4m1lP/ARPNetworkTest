@@ -12,7 +12,7 @@
 #include <linux/if_arp.h>
 #include <netinet/in.h>
 #include <errno.h>
-#include <cstdint>
+#include <stdint.h>
 
 #define BUF_SIZE 100
 
