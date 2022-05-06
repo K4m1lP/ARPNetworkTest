@@ -375,7 +375,7 @@ size_t processMessage(void* buffer) {
         prepareResponseIPv6(bytes);
         printf("\nIPv6 NA: ");
         printIPv6resp(bytes);
-        return 85;
+        return 86;
     }
 
     return 0;
